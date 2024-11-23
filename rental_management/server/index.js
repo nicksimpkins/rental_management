@@ -12,7 +12,7 @@ app.use(express.json());
 const dbConfig = {
   host: 'localhost',
   user: 'admin',
-  password: 'Putney155hill!',
+  password: 'XXXX',
   database: 'PropertyManagementSystem',
   port: 3306
 };
@@ -75,6 +75,52 @@ app.post('/auth/login', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Internal server error' 
+    });
+  }
+});
+
+app.get('/api/landlord/:userId', authenticateToken, async (req, res) => {
+  try {
+    const connection = await pool.getConnection();
+    try {
+      const [rows] = await connection.execute(`
+        SELECT 
+          u.name,
+          u.email,
+          u.phone,
+          l.landlordID,
+          l.licenseNumber,
+          l.companyName,
+          l.taxID,
+          COUNT(DISTINCT p.propertyID) as totalProperties,
+          COUNT(DISTINCT u2.unitID) as totalUnits
+        FROM User u
+        JOIN Landlord l ON u.userID = l.userID
+        LEFT JOIN Property p ON l.landlordID = p.ownerID
+        LEFT JOIN Unit u2 ON p.propertyID = u2.propertyID
+        WHERE u.userID = ?
+        GROUP BY u.userID, l.landlordID
+      `, [req.params.userId]);
+
+      connection.release();
+
+      if (rows.length === 0) {
+        return res.status(404).json({ message: 'Landlord not found' });
+      }
+
+      res.json({
+        success: true,
+        landlord: rows[0]
+      });
+    } catch (error) {
+      connection.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error fetching landlord details:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching landlord details' 
     });
   }
 });
