@@ -10,19 +10,20 @@ const LandlordDashboard = () => {
     const fetchLandlordData = async () => {
       try {
         const userId = localStorage.getItem('userId');
-        const token = localStorage.getItem('token');
+        console.log('Fetching data for userId:', userId); // Debug log
         
-        const response = await axios.get(`http://localhost:3005/api/landlord/${userId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        setLandlordData(response.data.landlord);
-        setLoading(false);
+        const response = await axios.get(`http://localhost:3005/landlord/${userId}`);
+        console.log('Landlord data response:', response.data); // Debug log
+        
+        if (response.data.success) {
+          setLandlordData(response.data.landlord);
+        } else {
+          setError(response.data.message || 'Failed to load landlord data');
+        }
       } catch (err) {
         console.error('Error fetching landlord data:', err);
         setError('Failed to load landlord data');
+      } finally {
         setLoading(false);
       }
     };
@@ -61,19 +62,19 @@ const LandlordDashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-gray-500">Name</p>
-                <p className="font-medium">{landlordData?.name}</p>
+                <p className="font-medium">{landlordData?.name || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Email</p>
-                <p className="font-medium">{landlordData?.email}</p>
+                <p className="font-medium">{landlordData?.email || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Phone</p>
-                <p className="font-medium">{landlordData?.phone}</p>
+                <p className="font-medium">{landlordData?.phone || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">License Number</p>
-                <p className="font-medium">{landlordData?.licenseNumber}</p>
+                <p className="font-medium">{landlordData?.licenseNumber || 'N/A'}</p>
               </div>
             </div>
           </div>
@@ -84,11 +85,11 @@ const LandlordDashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-gray-500">Company Name</p>
-                <p className="font-medium">{landlordData?.companyName}</p>
+                <p className="font-medium">{landlordData?.companyName || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Tax ID</p>
-                <p className="font-medium">{landlordData?.taxID}</p>
+                <p className="font-medium">{landlordData?.taxID || 'N/A'}</p>
               </div>
             </div>
           </div>

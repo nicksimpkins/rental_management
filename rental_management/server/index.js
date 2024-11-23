@@ -79,7 +79,9 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-app.get('/api/landlord/:userId', authenticateToken, async (req, res) => {
+app.get('/landlord/:userId', async (req, res) => {
+  console.log('Fetching landlord data for userId:', req.params.userId); // Debug log
+  
   try {
     const connection = await pool.getConnection();
     try {
@@ -103,9 +105,13 @@ app.get('/api/landlord/:userId', authenticateToken, async (req, res) => {
       `, [req.params.userId]);
 
       connection.release();
+      console.log('Query result:', rows); // Debug log
 
       if (rows.length === 0) {
-        return res.status(404).json({ message: 'Landlord not found' });
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Landlord not found' 
+        });
       }
 
       res.json({
@@ -120,7 +126,8 @@ app.get('/api/landlord/:userId', authenticateToken, async (req, res) => {
     console.error('Error fetching landlord details:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Error fetching landlord details' 
+      message: 'Error fetching landlord details',
+      error: error.message 
     });
   }
 });
