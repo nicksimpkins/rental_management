@@ -132,6 +132,108 @@ app.get('/landlord/:userId', async (req, res) => {
   }
 });
 
+app.get('/tenant/:userId', async (req, res) => {
+  console.log('Fetching tenant data for userId:', req.params.userId);
+  
+  try {
+    const connection = await pool.getConnection();
+    try {
+      const [rows] = await connection.execute(`
+        SELECT 
+          u.name,
+          u.email,
+          u.phone,
+          t.tenantID,
+          t.contactDetails,
+          t.leaseStatus,
+          l.leaseID,
+          l.startDate,
+          l.endDate,
+          l.rentAmount,
+          l.securityDeposit,
+          un.unitNumber,
+          un.size,
+          p.address,
+          p.type as propertyType,
+          GROUP_CONCAT(DISTINCT mr.description) as maintenanceRequests,
+          GROUP_CONCAT(DISTINCT mr.status) as requestStatuses,
+          COUNT(DISTINCT pay.paymentID) as totalPayments,
+          SUM(CASE WHEN pay.status = 'Paid' THEN pay.amount ELSE 0 END) as totalPaidAmount
+        FROM User u
+        JOIN Tenant t ON u.userID = t.userID
+        LEFT JOIN Lease l ON t.tenantID = l.tenantID
+        LEFT JOIN Unit un ON l.unitID = un.unitID
+        LEFT JOIN Property p ON un.propertyID = p.propertyID
+        LEFT JOIN MaintenanceRequest mr ON t.tenantID = mr.tenantID
+        LEFT JOIN Payment pay ON l.leaseID = pay.leaseID
+        WHERE u.userID = ?
+        GROUP BY u.userID, t.tenantID, l.leaseID
+      `, [req.params.userId]);
+
+      connection.release();
+      console.log('Query result:', rows);
+
+      if (rows.length === 0) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Tenant not found' 
+        });
+      }
+
+      // Get recent payments
+      const [payments] = await connection.execute(`
+        SELECT 
+          p.paymentID,
+          p.paymentDate,
+          p.amount,
+          p.status
+        FROM Payment p
+        JOIN Lease l ON p.leaseID = l.leaseID
+        JOIN Tenant t ON l.tenantID = t.tenantID
+        JOIN User u ON t.userID = u.userID
+        WHERE u.userID = ?
+        ORDER BY p.paymentDate DESC
+        LIMIT 5
+      `, [req.params.userId]);
+
+      // Get maintenance requests
+      const [requests] = await connection.execute(`
+        SELECT 
+          mr.requestID,
+          mr.description,
+          mr.status,
+          mr.priority,
+          mr.submissionDate
+        FROM MaintenanceRequest mr
+        JOIN Tenant t ON mr.tenantID = t.tenantID
+        JOIN User u ON t.userID = u.userID
+        WHERE u.userID = ?
+        ORDER BY mr.submissionDate DESC
+        LIMIT 5
+      `, [req.params.userId]);
+
+      res.json({
+        success: true,
+        tenant: {
+          ...rows[0],
+          recentPayments: payments,
+          maintenanceRequests: requests
+        }
+      });
+    } catch (error) {
+      connection.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error fetching tenant details:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching tenant details',
+      error: error.message 
+    });
+  }
+});
+
 const PORT = 3005;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
