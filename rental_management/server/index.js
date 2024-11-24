@@ -151,6 +151,7 @@ app.get('/tenant/:userId', async (req, res) => {
           l.endDate,
           l.rentAmount,
           l.securityDeposit,
+          un.unitID,           -- Added unitID
           un.unitNumber,
           un.size,
           p.address,
@@ -161,24 +162,15 @@ app.get('/tenant/:userId', async (req, res) => {
           SUM(CASE WHEN pay.status = 'Paid' THEN pay.amount ELSE 0 END) as totalPaidAmount
         FROM User u
         JOIN Tenant t ON u.userID = t.userID
-        LEFT JOIN Lease l ON t.tenantID = l.tenantID
-        LEFT JOIN Unit un ON l.unitID = un.unitID
+        JOIN TenantUnit tu ON t.tenantID = tu.tenantID    -- Added TenantUnit join
+        JOIN Unit un ON tu.unitID = un.unitID            -- Changed to join through TenantUnit
         LEFT JOIN Property p ON un.propertyID = p.propertyID
+        LEFT JOIN Lease l ON t.tenantID = l.tenantID
         LEFT JOIN MaintenanceRequest mr ON t.tenantID = mr.tenantID
         LEFT JOIN Payment pay ON l.leaseID = pay.leaseID
         WHERE u.userID = ?
-        GROUP BY u.userID, t.tenantID, l.leaseID
+        GROUP BY u.userID, t.tenantID, l.leaseID, un.unitID
       `, [req.params.userId]);
-
-      connection.release();
-      console.log('Query result:', rows);
-
-      if (rows.length === 0) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Tenant not found' 
-        });
-      }
 
       // Get recent payments
       const [payments] = await connection.execute(`
@@ -212,6 +204,20 @@ app.get('/tenant/:userId', async (req, res) => {
         LIMIT 5
       `, [req.params.userId]);
 
+      if (rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Tenant not found'
+        });
+      }
+
+      // Debug log to verify data
+      console.log('Tenant data being sent:', {
+        ...rows[0],
+        recentPayments: payments,
+        maintenanceRequests: requests
+      });
+
       res.json({
         success: true,
         tenant: {
@@ -226,10 +232,183 @@ app.get('/tenant/:userId', async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching tenant details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching tenant details',
+      error: error.message
+    });
+  }
+});
+
+app.get('/maintenance/:userId', async (req, res) => {
+  console.log('Fetching maintenance person data for userId:', req.params.userId);
+  
+  try {
+    const connection = await pool.getConnection();
+    try {
+      // Get maintenance person details and assigned requests
+      const [rows] = await connection.execute(`
+        SELECT 
+          u.name,
+          u.email,
+          u.phone,
+          mp.maintenancePersonID,
+          mp.skills,
+          mp.certifications,
+          mp.availability
+        FROM User u
+        JOIN MaintenancePerson mp ON u.userID = mp.userID
+        WHERE u.userID = ?
+      `, [req.params.userId]);
+
+      if (rows.length === 0) {
+        connection.release();
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Maintenance person not found' 
+        });
+      }
+
+      // Get assigned maintenance requests
+      const [requests] = await connection.execute(`
+        SELECT 
+          mr.requestID,
+          mr.description,
+          mr.status,
+          mr.priority,
+          mr.submissionDate,
+          u.name as tenantName,
+          p.address as propertyAddress,
+          un.unitNumber
+        FROM MaintenanceRequest mr
+        JOIN Tenant t ON mr.tenantID = t.tenantID
+        JOIN User u ON t.userID = u.userID
+        JOIN UnitMaintenanceRequest umr ON mr.requestID = umr.requestID
+        JOIN Unit un ON umr.unitID = un.unitID
+        JOIN Property p ON un.propertyID = p.propertyID
+        WHERE mr.maintenancePersonID = ?
+        ORDER BY 
+          CASE 
+            WHEN mr.status = 'Pending' THEN 1
+            WHEN mr.status = 'In Progress' THEN 2
+            ELSE 3
+          END,
+          CASE 
+            WHEN mr.priority = 'High' THEN 1
+            WHEN mr.priority = 'Medium' THEN 2
+            ELSE 3
+          END,
+          mr.submissionDate DESC
+      `, [rows[0].maintenancePersonID]);
+
+      // Get completed requests stats
+      const [stats] = await connection.execute(`
+        SELECT 
+          COUNT(*) as totalRequests,
+          SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as completedRequests,
+          SUM(CASE WHEN status = 'In Progress' THEN 1 ELSE 0 END) as inProgressRequests,
+          SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pendingRequests
+        FROM MaintenanceRequest
+        WHERE maintenancePersonID = ?
+      `, [rows[0].maintenancePersonID]);
+
+      connection.release();
+
+      res.json({
+        success: true,
+        maintenancePerson: {
+          ...rows[0],
+          requests,
+          stats: stats[0]
+        }
+      });
+
+    } catch (error) {
+      connection.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error fetching maintenance person details:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Error fetching tenant details',
+      message: 'Error fetching maintenance person details',
       error: error.message 
+    });
+  }
+});
+
+app.post('/maintenance-request', async (req, res) => {
+  console.log('Received request body:', req.body);
+  const { tenantId, description, priority, unitId } = req.body;
+
+  // Validate required fields
+  if (!tenantId || !description || !priority || !unitId) {
+    console.error('Missing required fields:', { tenantId, description, priority, unitId });
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields',
+      receivedData: { tenantId, description, priority, unitId }
+    });
+  }
+
+  try {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // Insert maintenance request
+      const [result] = await connection.execute(`
+        INSERT INTO MaintenanceRequest 
+        (tenantID, description, status, priority, submissionDate) 
+        VALUES (?, ?, 'Pending', ?, CURDATE())
+      `, [tenantId, description, priority]);
+
+      const requestId = result.insertId;
+      console.log('Created request with ID:', requestId);
+
+      // Insert into UnitMaintenanceRequest with explicit column specification
+      const [unitResult] = await connection.execute(`
+        INSERT INTO UnitMaintenanceRequest 
+        (unitID, requestID) 
+        VALUES (?, ?)
+      `, [unitId, requestId]);
+
+      console.log('Created UnitMaintenanceRequest with ID:', unitResult.insertId);
+
+      // Get the created request details
+      const [requests] = await connection.execute(`
+        SELECT 
+          mr.requestID,
+          mr.description,
+          mr.status,
+          mr.priority,
+          mr.submissionDate,
+          umr.unitMaintenanceRequestID
+        FROM MaintenanceRequest mr
+        JOIN UnitMaintenanceRequest umr ON mr.requestID = umr.requestID
+        WHERE mr.requestID = ?
+      `, [requestId]);
+
+      await connection.commit();
+      connection.release();
+
+      console.log('Successfully created maintenance request:', requests[0]);
+      res.json({
+        success: true,
+        request: requests[0]
+      });
+    } catch (error) {
+      await connection.rollback();
+      connection.release();
+      console.error('Transaction error:', error);
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error creating maintenance request:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating maintenance request',
+      error: error.message
     });
   }
 });
